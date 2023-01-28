@@ -2,7 +2,7 @@
  * Copyright (C) 2019-2021, The Linux Foundation. All rights reserved.
  * Not a Contribution.
  *
- * Copyright (C) 2017 The Android Open Source Project
+ * Copyright (C) 2021 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,7 +17,7 @@
  * limitations under the License.
  */
 
-#define LOG_TAG "android.hardware.usb@1.2-service-xiaomi_bengal"
+#define LOG_TAG "android.hardware.usb@1.3-service-xiaomi_bengal"
 
 #include <android-base/logging.h>
 #include <assert.h>
@@ -43,11 +43,49 @@
 namespace android {
 namespace hardware {
 namespace usb {
-namespace V1_2 {
+namespace V1_3 {
 namespace implementation {
 
 const char GOOGLE_USB_VENDOR_ID_STR[] = "18d1";
 const char GOOGLE_USBC_35_ADAPTER_UNPLUGGED_ID_STR[] = "5029";
+
+Return<bool> Usb::enableUsbDataSignal(bool enable) {
+  bool result = true;
+
+  ALOGI("Userspace turn %s USB data signaling", enable ? "on" : "off");
+
+  if (enable) {
+    if (!WriteStringToFile("1", mDevicePath + USB_DATA_PATH) &&
+        !WriteStringToFile("OFF", USB_DATA_PATH_SEC)) {
+      ALOGE("Not able to turn on usb connection notification");
+      result = false;
+    }
+
+    if (!WriteStringToFile(mGadgetName, PULLUP_PATH)) {
+      ALOGW("Gadget cannot be pulled up");
+    }
+  } else {
+    if (!WriteStringToFile("1", mDevicePath + ID_PATH)) {
+      ALOGW("Not able to turn off host mode");
+    }
+
+    if (!WriteStringToFile("0", mDevicePath + VBUS_PATH)) {
+      ALOGW("Not able to set Vbus state");
+    }
+
+    if (!WriteStringToFile("0", mDevicePath + USB_DATA_PATH) &&
+        !WriteStringToFile("ON", USB_DATA_PATH_SEC)) {
+      ALOGE("Not able to turn off usb connection notification");
+      result = false;
+    }
+
+    if (!WriteStringToFile("none", PULLUP_PATH)) {
+      ALOGW("Gadget cannot be pulled down");
+    }
+  }
+
+  return result;
+}
 
 // Set by the signal handler to destroy the thread
 volatile bool destroyThread;
@@ -103,23 +141,17 @@ static int32_t writeFile(const std::string &filename,
 
 std::string appendRoleNodeHelper(const std::string &portName,
                                  PortRoleType type) {
+  std::string node("/sys/class/typec/" + portName);
 
-    if ((portName == "..") || (portName.find('/') != std::string::npos)) {
-       ALOGE("Fatal: invalid portName");
-       return "";
-    }
-
-    std::string node("/sys/class/typec/" + portName);
-
-    switch (type) {
-      case PortRoleType::DATA_ROLE:
-        return node + "/data_role";
-      case PortRoleType::POWER_ROLE:
-        return node + "/power_role";
-      case PortRoleType::MODE:
-        return node + "/port_type";
-      default:
-        return "";
+  switch (type) {
+    case PortRoleType::DATA_ROLE:
+      return node + "/data_role";
+    case PortRoleType::POWER_ROLE:
+      return node + "/power_role";
+    case PortRoleType::MODE:
+      return node + "/port_type";
+    default:
+      return "";
   }
 }
 
@@ -226,12 +258,14 @@ wait_again:
   return roleSwitch;
 }
 
-Usb::Usb()
+Usb::Usb(std::string deviceName, std::string gadgetName)
         : mLock(PTHREAD_MUTEX_INITIALIZER),
           mRoleSwitchLock(PTHREAD_MUTEX_INITIALIZER),
           mPartnerLock(PTHREAD_MUTEX_INITIALIZER),
           mPartnerUp(false),
-          mContaminantPresence(false) {
+          mContaminantPresence(false),
+          mDevicePath(SOC_PATH + deviceName + "/"),
+          mGadgetName(gadgetName) {
     pthread_condattr_t attr;
     if (pthread_condattr_init(&attr)) {
         ALOGE("pthread_condattr_init failed: %s", strerror(errno));
@@ -599,7 +633,7 @@ Return<void> Usb::queryPortStatus() {
 
 struct data {
   int uevent_fd;
-  android::hardware::usb::V1_2::implementation::Usb *usb;
+  android::hardware::usb::V1_3::implementation::Usb *usb;
 };
 
 Return<void> callbackNotifyPortStatusChangeHelper(struct Usb *usb) {
@@ -787,7 +821,7 @@ void *work(void *param) {
   }
 
   payload.uevent_fd = uevent_fd;
-  payload.usb = (android::hardware::usb::V1_2::implementation::Usb *)param;
+  payload.usb = (android::hardware::usb::V1_3::implementation::Usb *)param;
 
   fcntl(uevent_fd, F_SETFL, O_NONBLOCK);
 
@@ -1030,16 +1064,9 @@ static void checkUsbDeviceAutoSuspend(const std::string& devicePath) {
 static bool checkUsbInterfaceAutoSuspend(const std::string& devicePath,
         const std::string &intf) {
   std::string bInterfaceClass;
-  int interfaceClass, ret = -1, retry = 3;
+  int interfaceClass, ret = -1;
 
-  do {
-	  readFile(devicePath + "/" + intf + "/bInterfaceClass",
-			  &bInterfaceClass);
-  } while ((--retry > 0) && (bInterfaceClass.length() == 0));
-
-  if (bInterfaceClass.length() == 0) {
-	  return false;
-  }
+  readFile(devicePath + "/" + intf + "/bInterfaceClass", &bInterfaceClass);
   interfaceClass = std::stoi(bInterfaceClass, 0, 16);
 
   // allow autosuspend for certain class devices
@@ -1062,18 +1089,21 @@ static bool checkUsbInterfaceAutoSuspend(const std::string& devicePath,
 }
 
 }  // namespace implementation
-}  // namespace V1_2
+}  // namespace V1_3
 }  // namespace usb
 }  // namespace hardware
 }  // namespace android
 
 int main() {
+  using android::base::GetProperty;
   using android::hardware::configureRpcThreadpool;
   using android::hardware::joinRpcThreadpool;
-  using android::hardware::usb::V1_2::IUsb;
-  using android::hardware::usb::V1_2::implementation::Usb;
+  using android::hardware::usb::V1_3::IUsb;
+  using android::hardware::usb::V1_3::implementation::Usb;
 
-  android::sp<IUsb> service = new Usb();
+  android::sp<IUsb> service = new Usb(
+      GetProperty(USB_DEVICE_PROP, "4e00000.ssusb"),
+      GetProperty(USB_CONTROLLER_PROP, "4e00000.dwc3"));
 
   configureRpcThreadpool(1, true /*callerWillJoin*/);
   android::status_t status = service->registerAsService();
