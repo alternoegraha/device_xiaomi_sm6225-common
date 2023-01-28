@@ -332,14 +332,12 @@ PRODUCT_PACKAGES += \
     init.qcom.early_boot.sh \
     init.qcom.post_boot.sh \
     init.qcom.sh \
-    init.qcom.usb.sh \
     init.qti.dcvs.sh
 
 PRODUCT_PACKAGES += \
     fstab.qcom \
     fstab.qcom_ramdisk \
     init.qcom.rc \
-    init.qcom.usb.rc \
     init.recovery.qcom.rc \
     init.target.rc \
     ueventd.qcom.rc
@@ -403,8 +401,14 @@ PRODUCT_COPY_FILES += \
 
 # USB
 PRODUCT_PACKAGES += \
-    android.hardware.usb@1.2-service-xiaomi_bengal \
+    android.hardware.usb@1.3-service-xiaomi_bengal \
     android.hardware.usb.gadget@1.0-service-xiaomi_bengal
+
+PRODUCT_PACKAGES += \
+    init.qcom.usb.debug.rc \
+    init.qcom.usb.debug.sh\
+    init.qcom.usb.rc \
+    init.qcom.usb.sh
 
 PRODUCT_COPY_FILES += \
     frameworks/native/data/etc/android.hardware.usb.accessory.xml:$(TARGET_COPY_OUT_VENDOR)/etc/permissions/android.hardware.usb.accessory.xml \
